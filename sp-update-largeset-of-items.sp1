@@ -1,0 +1,111 @@
+param ( 
+    [Parameter(Mandatory=$true)][string]$url, 
+    [Parameter(Mandatory=$true)][string]$listName
+) 
+   
+$Assemblies = ("Microsoft.SharePoint, Version=14.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c",  
+               "Microsoft.Office.Server, Version=14.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c")  
+   
+$Source = @" 
+   
+using Microsoft.SharePoint; 
+using Microsoft.SharePoint.Administration; 
+using Microsoft.Office.Server.Utilities; 
+using System; 
+   
+namespace ContentIterator.Example 
+{ 
+    public static class FieldUpdater 
+    { 
+        public static void Update(SPList list) 
+        { 
+            SPContentType contentType = list.ContentTypes["Example Content Type"]; 
+            string query = @"
+                <Where> 
+                    <Eq> 
+                        <FieldRef Name='ContentTypeId' /> 
+                        <Value Type='Text'>" + contentType.Id + @"</Value> 
+                    </Eq> 
+                </Where>"; 
+                  
+            ContentIterator iterator = new ContentIterator(); 
+            iterator.ProcessListItems( 
+                list,  
+                query, 
+                true, 
+                delegate(SPListItemCollection items) 
+                { 
+                    foreach (SPListItem item in items) 
+                    { 
+                        UpdateItem(item); 
+                    } 
+                }, 
+                delegate(SPListItemCollection items, Exception ex)  
+                { 
+                    throw ex; 
+                }); 
+        } 
+          
+        private static void UpdateItem(SPListItem item)  
+        { 
+            if (item.Fields.ContainsField("CustomField"))  
+            {
+                item["CustomField"] = "Some other value";
+                item.Update(); 
+                  
+                Console.Write("."); 
+            } 
+        } 
+    } 
+} 
+   
+"@ 
+   
+Write-Host
+   
+try { 
+   
+    Add-Type -ReferencedAssemblies $Assemblies -TypeDefinition $Source -Language CSharp 
+   
+    $web = Get-SPWeb $url
+    if (!$web.Exists) { 
+        throw [Exception] ($url + " does not exist.") 
+    } 
+      
+    $site = $web.Site 
+    $rootWeb = $site.RootWeb 
+   
+    $list = $web.Lists.TryGetList($listName) 
+    if ($list -eq $null) { 
+        throw [Exception] ($listName + "does not exist in " + $url + ".") 
+    } 
+      
+    if (!$list.Fields.ContainsField("CustomField")) { 
+        throw [Exception] ($listName + "does not have CustomField.") 
+    } 
+   
+    Write-Host "Indexing Content Type ID field..." -NoNewLine
+    $field = $list.Fields.GetField("ContentTypeId") 
+    if ($field.Indexed) { 
+        Write-Host "Skipped" -ForegroundColor Yellow 
+    } 
+    else { 
+        $field.Indexed = $true
+        $field.Update() 
+        Write-Host "Done" -ForegroundColor Green 
+    } 
+   
+    Write-Host "Updating CustomField..." -NoNewLine
+      
+    [ContentIterator.Example.FieldUpdater]::Update($list) 
+      
+    Write-Host "Done" -ForegroundColor Green 
+      
+}  
+catch { 
+    Write-Host "Error" -ForegroundColor Red 
+    Write-Host $_.Exception.Message -ForegroundColor Red 
+    Write-Host $_.Exception.StackTrace -ForegroundColor Red 
+} 
+   
+Write-Host
